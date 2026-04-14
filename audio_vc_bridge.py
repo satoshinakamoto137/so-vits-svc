@@ -145,6 +145,11 @@ class AudioVCBridgeEngine:
 
         self.input_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=64)
         self.output_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=64)
+        # accumulate several small input blocks into a longer window
+        # before running VC, to avoid artifacts and very short tensors.
+        self._accum_buffer = np.zeros(0, dtype=np.float32)
+        # minimum seconds of audio per VC call (e.g. ~0.35s like RealTimeVC)
+        self.min_vc_seconds = 0.35
 
     def input_callback(self, indata, frames, time_info, status):
         if status:
@@ -196,14 +201,31 @@ class AudioVCBridgeEngine:
                 continue
 
             try:
-                # Apply gain first
+                # Append new block to accumulator
                 x_proc = (x * self.gain).astype(np.float32)
+                if self._accum_buffer.size == 0:
+                    self._accum_buffer = x_proc
+                else:
+                    self._accum_buffer = np.concatenate(
+                        [self._accum_buffer, x_proc]
+                    )
+
+                # if we don't have enough samples yet, wait for more
+                min_vc_samples = int(self.sample_rate * self.min_vc_seconds)
+                if self._accum_buffer.size < max(min_vc_samples, 2048):
+                    continue
+
+                # take a window for VC and keep some overlap to smooth continuity
+                vc_input = self._accum_buffer[:min_vc_samples]
+                # keep 50% overlap in the buffer
+                keep_from = min_vc_samples // 2
+                self._accum_buffer = self._accum_buffer[keep_from:]
 
                 if self.bypass or self.filter is None:
-                    y = x_proc
+                    y = vc_input
                     y_sr = self.sample_rate
                 else:
-                    y, y_sr = self.filter.process_block(x_proc, self.sample_rate)
+                    y, y_sr = self.filter.process_block(vc_input, self.sample_rate)
 
                 # Resample if model sample rate != engine sample rate
                 if y_sr != self.sample_rate and len(y) > 1:
