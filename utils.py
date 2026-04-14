@@ -109,6 +109,9 @@ def get_f0_predictor(f0_predictor,hop_length,sampling_rate,**kargs):
     return f0_predictor_object
 
 def get_speech_encoder(speech_encoder,device=None,**kargs):
+    # 🔧 Normalizar nombre
+    speech_encoder = speech_encoder.lower().replace("-", "").replace("_", "")
+
     if speech_encoder == "vec768l12":
         from vencoder.ContentVec768L12 import ContentVec768L12
         speech_encoder_object = ContentVec768L12(device = device)
